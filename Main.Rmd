@@ -1,0 +1,653 @@
+---
+title: "Statistiques multidimensionnelles: Données de nutrition pour bébés et enfants"
+author: "Danny Morgant, Yoann Pull"
+date: "2023-01-08"
+output:
+  html_document:
+    theme: cosmo
+    code_folding: hide
+    toc: true
+    toc_float: true
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width=8, fig.height=4)
+
+library(FactoMineR)
+library(data.table)
+library(corrplot)
+library(ggplot2)
+library(factoextra)
+library(gridExtra)
+library(GGally)
+```
+```{r}
+
+bckgd = '#EDEDED'
+line_color='#CDCDCD'
+linesize = 0.5
+colors = c('#ba1919','#e29924','#1874C1','#197113','#9689DF')
+geom_bar_theme = geom_bar(stat = 'identity',
+                          fill = colors[3],
+                          color = '#000000')
+theme_rdsm = theme( axis.text.x = element_text(angle = 60, vjust = 1, hjust=1),
+      legend.position="none",
+      plot.title = element_text(hjust = 0.5,face = 'bold'),
+      panel.background = element_rect(fill=bckgd, color=bckgd),
+      panel.grid.major = element_line(color=bckgd),
+      panel.grid.minor = element_line(color=bckgd),
+      panel.grid.major.y = element_line(color=line_color, 
+                                        linetype = "dashed",
+                                        linewidth=0.1),
+      legend.title = element_blank())
+
+options(ggrepel.max.overlaps = Inf)
+data = load("data.baby.RData")
+data.baby2.comp$ID = as.numeric(rownames(data.baby2.comp))
+data.baby2.comp$ShortDescrip = data.baby.comp$ShortDescrip
+```
+# Introduction 
+
+### a) ACP normée ou non normée?
+> Pourquoi d'après-vous faut-il faire une ACP normée?
+
+Si on ne norme pas les variables, l'analyse donnera plus d'importance à celles ayant des variances plus élevées ou des unités de plus grande magnitude. Ce n'est pas nécessairement ce que l'on veut car cet effet risque d'obfusquer des relations inter-variables. 
+On peut l'observer ici en effectuant une ACP non normée.
+
+### b) ACP non normée  
+> Appliquez rapidement une ACP non normée: commentez la projection des variables et justifiez la position de la variable VitA_mcg
+
+```{r}
+pca_a = PCA(data.baby2.comp[,1:13], graph=FALSE, scale.unit=FALSE)
+cbind("QLT.12" = rowSums(pca_a$var$cos2[, 1:2]), pca_a$var$cos2[, 1:2])
+```
+
+On voit que la qualité de représentation (QLT) de la vitamine A est excellente sur le premier plan factoriel, mais aux dépends de la plupart des autres variables. Voyons le graphe de projection des variables:
+
+```{r}
+variable_variances = sapply(data.baby2.comp[1:13], var)
+variable_variances = sort(variable_variances / sum(variable_variances), decreasing = T)
+
+bar_plot_variances = ggplot(data.frame(variable_variances,
+                                       x = reorder(names(variable_variances),
+                                                   variable_variances,
+                                                   decreasing = T),
+                                       y = variable_variances),
+                            aes(x = x, y = y)) +
+  geom_bar_theme +
+  labs(title="Variances des variables", x = 'Nutriments', y = 'Variances') +
+  theme_rdsm
+
+grid.arrange(fviz_pca_var(pca_a, repel=T), bar_plot_variances, ncol=2)
+```
+
+Très clairement, la valeur de la vitamine A déforme totalement le nuage de point, et a une importance démesurée sur le premier axe factoriel. En effet, la vitamine A contribue pour plus de 80% de l'inertie totale du nuage de point. Afin de s'affranchir de cet effet et donc de mieux représenter l'ensemble des variables, nous utiliserons une ACP normée pour la suite de l'analyse.
+
+# Analyse uni et bivariée
+### a) Statistiques descriptives univariées
+> Calculez les valeurs moyennes et les quantiles 10% et 90% des variables numériques de data.baby2.comp
+
+```{r}
+stats = rbind(colMeans(data.baby2.comp[1:13]),
+              sapply(data.baby2.comp[1:13], function(x) quantile(x, c(0.1,0.9))))
+rownames(stats) = c("Mean", "Q 10%", "Q 90%")
+stats
+```
+### b) Matrice de corrélation
+> Donnez la matrice de corrélation et commentez.
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width=8, fig.height=6)
+```
+```{r}
+corrplot(cor(data.baby2.comp[1:13]),method="number",number.cex=0.7)
+```
+
+La corrélation est une mesure statistique entre deux variables qui mesure une relation monotone entre elles. Si une corrélation est positive alors une valeur forte d'une variable correspondra plutôt à des valeurs fortes de la seconde, même chose pour les valeurs moyennes et faibles. 
+
+On remarque que la quantité de fibre est très peu corrélée avec les autres variables à l'exception des vitamines B1,B2 et B3 avec lesquelles la corrélation est légèrement positive (~0,45). Les quantités de vitamines B1,B2 et B3 sont d'ailleurs très corrélées positivement entre elles. Les quantités de vitamines B9,B12, A et E sont également corrélées positivement entre elles. La quantité de graisse est fortement corrélée positivement avec les quantités de vitamine A, B12, E et B9 ainsi qu'avec le sucre et les protéines. Notons qu'elle légérement corrélée négativement avec les fibres. Les quantités de sucre et de protéines sont corrélées positivement entre elles et avec quasiment toutes les vitamines.
+
+### c) Matrice des corrélation croisées
+> Calculez avec ggpairs (package Ggally) la matrice des graphiques croisés pour les vitamines seulement. Justifiez le fait de supprimer dans la suite les valeurs extrêmes de VitB6, VitB12 et VitC
+
+Les valeurs extrêmes risquent d'avoir une contribution à la construction des axes très forte, ce qui ferait que ces axes ne seraient pas représentatifs de la totalité des données mais plutôt fortement biaisée par la présence de quelques individus. On a en effet vu dans la première question que l'ACP était sensible à la variance, elle est donc également sensible aux valeurs extrêmes.
+
+Il peut y avoir plusieurs raisons à la présence de valeurs extrêmes:  
+- Soit y il a effectivement des plats beaucoup plus riches que d'autres. Notamment on ne connaît pas l'origine et la description des données, et on ne sait pas si les quantités sont rapportées à une même échelle (quantité pour 100g par exemple), ou si ce sont les quantités par plat.  
+- Soit il peut simplement y avoir des erreurs de saisies. Si les quantités sont rapportées à une même échelle, une entrée de 6mg de vitamine B6 pour 100g d'aliment semble beaucoup plus élevée que ce que l'on peut normalement trouver dans les aliments habituels.
+
+```{r}
+ggpairs(data.baby2.comp[1:9], progress = FALSE)
+```
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width=8, fig.height=4)
+```
+
+On voit dans les distributions ci-dessus des valeurs extrêmes dans les pairplots des vitamines B6, B12 et C. Commençons par chercher les plats avec des valeurs extrêmes en vitamines B6, B12 et C. On va pour cela sélectionner les plats ayant des valeurs supérieures à 1.5 fois la distance interquartiles Q1-Q3 au-delà du troisième quartile, conformément à la définition des valeurs aberrantes utilisée pour les boîtes à moustaches. Tout d'abord calculons le seuil minimal pour considérer une valeur comme extrême:
+```{r}
+thresholds = sapply(data.baby2.comp[, c("VitC_mg", "VitB6_mg", "VitB12_mcg")],
+                    function(x) quantile(x, c(0.25, 0.75)))
+thresholds = rbind(thresholds, thresholds[2,] - thresholds[1,])
+thresholds = rbind(thresholds, 1.5*thresholds[3,] + thresholds[2,])
+rownames(thresholds) = c("Q1", "Q3", "IQD", "extreme_value_threshold")
+thresholds
+```
+
+Nous pouvons maintenant sélectionner les plats ayant une valeur supérieure à ces valeurs seuil:
+```{r}
+potential_extreme_plates = as.numeric(rownames(
+  data.baby2.comp[((data.baby2.comp[,"VitC_mg"] > thresholds[4, "VitC_mg"]) |
+                  (data.baby2.comp[,"VitB6_mg"] > thresholds[4, "VitB6_mg"]) |
+                  (data.baby2.comp[,"VitB12_mcg"] > thresholds[4, "VitB12_mcg"])), 
+                  ]))
+cat("Il y a", length(potential_extreme_plates), "plats avec des valeurs extremes en vitamines C, B6 ou B12")
+```
+
+Afin de choisir quels plat à enlever, nous allons effectuer une première ACP afin regarder si certains d'entre eux ont une contribution trop élevée à la construction du premier plan factoriel. A gauche nous voyons les plats qui ont une contribution supérieure à 0.5%. On voit que 8-9 plats ont une contribution plus élevée que le reste. Nous allons arbitrairement choisir d'en enlever 7, parmi les plats sélectionnés plus haut pour leurs valeurs extrêmes. A droite nous avons pris un seuil de 1% afin de mieux voir les plats qui ont les contributions les plus élevées.
+
+```{r}
+data_ne = data.baby2.comp
+pca_total = PCA(data_ne[, 1:9], graph=FALSE)
+contrib_12 = rowSums(pca_total$ind$contrib[, 1:2])
+total_contrib = sum(contrib_12)
+normalized_contribs = contrib_12/total_contrib
+to_display_200 = normalized_contribs[normalized_contribs > 0.005]
+colors_200 = rep("grey", length(to_display_200))
+colors_200[as.numeric(names(to_display_200)) %in% potential_extreme_plates] = colors[3]
+
+bar_plot1 = ggplot(data.frame(x = names(to_display_200),
+                              y = to_display_200),
+                   aes(x=x,y=y)
+                    ) +
+  geom_bar(stat = "identity", fill = colors_200, col = '#000000') +
+  labs(title = 'Contributions > 0.5%', x = 'Plats', y="Contributions") +
+  theme_rdsm  + theme(axis.text.x=element_blank())
+
+to_display_100 = normalized_contribs[normalized_contribs > 0.01]
+colors_100 = rep("grey", length(to_display_100))
+colors_100[as.numeric(names(to_display_100)) %in% potential_extreme_plates] = colors[3]
+
+bar_plot2 = ggplot(data.frame(x = names(to_display_100),
+                              y = to_display_100),
+                   aes(x=x,y=y)
+                    ) +
+  geom_bar(stat = "identity", fill = colors_100, col = '#000000') +
+  labs(title = 'Contributions > 1%', x = 'Plats', y="Contributions") +
+  theme_rdsm
+
+grid.arrange(bar_plot1,bar_plot2, ncol = 2)
+```
+
+Il semble que les contributions au second axe sont plutôt bien réparties entre
+plusieurs plats, nous choisissons donc de ne pas en enlever d'autre.
+
+Nous pouvons donc enlever les plats en question:
+
+```{r}
+to_remove_index = c(123, 126, 129, 130, 144, 145, 146)
+names(normalized_contribs) = data_ne[names(normalized_contribs),]$ID
+cat("Nombre de plats à enlever: ", length(to_remove_index), "\n")
+data_ne = data_ne[!(data_ne$ID %in% to_remove_index),]
+
+```
+### d) Catégorisation de la variable "Sucre"
+> Construisez la variable catégorielle CatSugar qui coupe la variables Sugar en 3 modalités selon les quartiles Q1 et Q3 puis tracer les boites à moustaches parallèles de VitC selon ces groupes d’aliments. Commenter.
+
+```{r}
+sug_quants = quantile(data_ne$Sugar_g, c(0.25,0.75))
+data_ne$CatSugar = as.factor(ifelse(data_ne$Sugar_g < sug_quants["25%"], "Low",
+                        ifelse(data_ne$Sugar_g < sug_quants["75%"], "Medium", "High")))
+
+VitC_bp = ggplot(data = data_ne, aes(y = VitC_mg, x = CatSugar, fill = CatSugar )) +
+  geom_boxplot() + coord_flip() + theme_rdsm +
+  labs(title="Relation entre les niveaux de sucres et la quantité de vitamine C", 
+       y="Quantité de vitamine C", x="Niveau de sucre") +
+  theme(plot.title=element_text(size=12))
+VitC_bp
+```
+
+On voit que plus la quantité de sucre est élevée et plus il y a de dispersion 
+pour la quantité de vitamine C: les distances interquartiles des distributions
+de quantité de vitamine C augmentent en effet fortement avec la quantité de 
+sucre.
+
+Egalement, il semble que les différentes catégories de quantités de sucres ont des profils de quantité de vitamines C bien disctincts. Le rapport de corrélation plutôt faible confirme cette observation:
+
+```{r}
+categories = list(data_ne[data_ne$CatSugar=="Low",]$VitC_mg, 
+                  data_ne[data_ne$CatSugar=="Medium",]$VitC_mg, 
+                  data_ne[data_ne$CatSugar=="High",]$VitC_mg)
+correlation_ratio = 1 - sum(sapply(categories, function(x) length(x)*var(x))) / 
+  (length(data_ne$VitC_mg)*var(data_ne$VitC_mg))
+cat("Rapport de corrélation: ", correlation_ratio)
+```
+
+# ACP normées du jeu de données
+
+### a) Interprétation de l'ACP normée
+> Faites l’ACP normée sur les variables de Vitamines en mettant les variables Fat, Sugar, Protein, Fiber en variables supplémentaires. Commentez l’éboulis des valeurs propres en analysant les pourcentages d’inerties, interprétez les axes, en commentant la projection des variables supplémentaires.
+
+```{r}
+pca_b = PCA(data_ne[, 1:13], scale.unit = TRUE, quanti.sup=10:13, 
+             graph=FALSE)
+
+ggplot(data.frame(pca_b$eig[, "eigenvalue"],
+                  x = names(pca_b$eig[, "eigenvalue"]),
+                  y = pca_b$eig[, "eigenvalue"]),
+       aes(x=x,y=y)) +
+    geom_bar(stat="identity", fill = colors[3], color = '#000000', width=0.3) +
+  labs(title ='Eboulis des valeurs propres', x = '', y="") +
+  theme_rdsm
+```
+
+Sur l'éboulis des valeurs propres, il semble y avoir une cassure entre la seconde et la troisième valeur propre.
+```{r}
+pca_b$eig
+```
+
+En effet, on remarque qu'à partir de trois composantes principales on explique 
+ plus de 85% de l'inertie du nuage de points. Notons cependant que d'après la 
+variance cumulée, à partir de seulement deux composantes on explique déjà plus 
+de 75% de la variance. Si on s'en tenait à la règle de Kaiser, on sélectionnerait seulement deux 
+composantes car la troisième a une valeur propre inférieure à 1.
+
+Pour interpréter les axes, on va également avoir besoin de s'assurer de la qualité de représentation des variables sur lesquelles on va vouloir s'appuyer:
+
+```{r}
+repres = cbind(pca_b$var$coord[, 1:2], 
+               pca_b$var$cos2[, 1:2])
+colnames(repres) = c("Phi1", "Phi2", "QLT1", "QLT2")
+repres
+```
+
+On note que toutes les variables sont à peu près correctement représentées sur le premier axe factoriel, à l'exception de VitC. En voyant que le premier axe factoriel a des composantes positives pour toutes les vitamines, on peut l'interpréter comme un axe représentant la richesse en vitamines des plats.  
+
+Pour le second axe l'interprétation va être plus hasardeuse: les qualités de représentations sont globalement assez mauvaises, à l'exception du groupe de vitamines B1, B2 et B3, ainsi qu'éventuellement la vitamine A. Ce second axe a des composantes positives relativement élevées pour le groupe de vitamines B1, B2 et B3, et une composante négative avec la vitamine A. Des valeurs élevées sur cet axe représentent donc des fortes teneurs en vitamines B1 B2 et B3 et une teneur plus faible en vitamine C.
+
+```{r}
+plot(pca_b, axes=1:2, choix="var") + theme_rdsm
+```
+
+On observe que la qualité de représentation des fibres est assez faible car plutôt éloignée du cercle de corrélation, et donc on se restreindra de l'interpréter selon ces axes.
+
+A l'inverse, on voit que les protéines, graisses et sucres sont bien projetés sur car elles sont plus proches du cercle unitaire.  
+Ces trois nutriments ont une grande première composante principale, donc leur
+présence dans un plat est associée à une plus grande richesse en vitamines de 
+ce plat.  
+Ils se distinguent sur le second axe: les protéines ont une faible amplitude sur la seconde
+composante principale, montrant qu'elles ne sont pas associées à une une plus grande ou faible teneur en vitamines A, B1, B2 et B3 en moyenne. Les graisses et les sucres quand à eux ont une seconde composante principale négative modérée, et donc sont plus souvent présents dans les plats avec plus de vitamine A et moins de vitamines B1, B2 et B3.
+
+
+### b) Plats les plus contribuants à la construction des axes
+> Donnez les 20 plats les plus contribuants à la construction de l’axe 1, à la construction de l’axe2, à la construction du plan (1,2).
+
+Nous cherchons les listes des plats les plus contributifs à la construction des deux premiers axes, et du premier plan factoriel.
+
+```{r}
+individuals_contributions = pca_b$ind$contrib[, c("Dim.1", "Dim.2")]
+individuals_contributions1 = individuals_contributions[
+  order(individuals_contributions[,1], decreasing=TRUE), ]
+individuals_contributions2 = individuals_contributions[
+  order(individuals_contributions[,2], decreasing=TRUE), ]
+individuals_contributions12 = individuals_contributions[
+  order(rowSums(individuals_contributions[,1:2]), decreasing=TRUE), ]
+```
+
+20 plats qui contribuent le plus à l'axe 1:
+```{r}
+twenty_axis1_plates = data_ne[as.numeric(rownames(individuals_contributions1)),]$ID[1:20]
+data_ne[data_ne$ID %in% twenty_axis1_plates, "ShortDescrip"]
+```
+
+20 plats qui contribuent le plus à l'axe 2:
+```{r}
+twenty_axis2_plates = data_ne[as.numeric(rownames(individuals_contributions2)),]$ID[1:20]
+data_ne[data_ne$ID %in% twenty_axis2_plates, "ShortDescrip"]
+```
+20 plats qui contribuent le plus à la construction du plan (1,2):
+```{r}
+twenty_axis12_plates = data_ne[as.numeric(rownames(individuals_contributions12)),]$ID[1:20]
+data_ne[data_ne$ID %in% twenty_axis12_plates, "ShortDescrip"]
+```
+
+### c) Interprétation des positions de quelques plats
+> Donnez une interprétation des positions de quelques plats sur le premier plan factoriel (et sur le second) en vous aidant de leur intitulé.
+
+Nous allons représenter les plats sur le plan factoriel en mettant en avant les plats qui sont les mieux projetés:
+
+```{r}
+coords1 = data.frame(pca_b$ind$coord[, 1:2])
+colnames(coords1)[1:2] = c("Dim1", "Dim2")
+
+params1 = lapply(data.frame(cbind(
+  QLT12 = rowSums(pca_b$ind$cos2[, 1:2])),
+  ID = rownames(pca_b$ind$coord)),
+  as.numeric)
+
+first_fact_plot = ggplot(coords1) + 
+  geom_point(aes(x=Dim1, y=Dim2, alpha=params1$QLT12**2), size=params1$QLT12,
+             color = colors[3]) +
+  labs(title ='Premier plan factoriel')+
+  theme(legend.position="none") +
+  geom_text(x=coords1$Dim1, y=coords1$Dim2, label=params1$ID, vjust=-0.5,
+            alpha=params1$QLT12**2, size=3 * params1$QLT12, check_overlap = T) +
+  theme_rdsm
+```
+
+Observons le premier plan factoriel:  
+On voit que tous les plats ont une première composante principale positive.
+
+```{r}
+plates = c(125, 134, 1, 18, 143, 325, 237)
+data_ne[data_ne$ID %in% plates, c("ID", "ShortDescrip")]
+```
+
+On voit que les plats 1, 18 et 143 sont situés à gauche, il s'agit de plats ayant une plutôt faible richesse en vitamine. On voit qu'ils sont tous les trois destinés à des bébés, et semblent composés plutôt de fruits et de légumes. Leur second composante est faible en magnitude, montrant que ce sont des plats plutôt équilibrés.  
+Les plats 125 et 134 sont eux plus riches en nutriments, et ont également une grande composante sur le second axe: une forte teneur en vitamines B1, B2 et B3. Ce sont des plats contenant des céréales.
+Les plats 237 et 325 sont placés très à droite et avec une valeur négative selon le deuxième axe: donc des plats très riches et avec une faible teneur en vitamines B1, B2, B3 et plus élevée en vitamine A. Il est difficile de comprendre à leur description ce qu'ils contiennent.
+
+On remarque également que les plats qui ont des positions proches dans le plan ont tendance à avoir des compositions d'aliments proches.
+
+Nous pouvons également regarder la projection sur le second plan factoriel:
+
+```{r}
+coords2 = data.frame(pca_b$ind$coord[, 3:4])
+colnames(coords2)[1:2] = c("Dim3", "Dim4")
+
+params2 = lapply(data.frame(cbind(
+  QLT34 = rowSums(pca_b$ind$cos2[, 3:4])),
+  ID = rownames(pca_b$ind$coord)),
+  as.numeric)
+
+second_fact_plot = ggplot(coords2) + 
+  geom_point(aes(x=Dim3, y=Dim4, alpha=params2$QLT34**2), size=params2$QLT34,
+             colour = colors[3]) +
+  labs(title ='Second plan factoriel')+
+  theme(legend.position="none") +
+  geom_text(x=coords2$Dim3, y=coords2$Dim4, label=params2$ID, vjust=-0.5,
+            alpha=params2$QLT34**2, size=3*params2$QLT34, check_overlap = T)+
+  theme_rdsm
+
+
+grid.arrange(first_fact_plot,second_fact_plot,ncol=2)
+```
+
+```{r}
+plates = c(16, 105, 356)
+data_ne[data_ne$ID %in% plates, c("ID", "ShortDescrip")]
+```
+
+Sur le second plan factoriel, on voit que les plats 16 et 105 ont une valeur positive pour leur troisième et quatrième composante principale. Ces deux plats semblent être composés principalement de fruits. Le plat 356 quand à lui a une valeur négative pour sa troisième composante et positive pour sa quatrième, il s'agit d'un yaourt aux fruits. Il se peut que le troisième axe représente les laitages sur ses valeurs négatives, et que le quatrième représente les fruits pour ses valeurs positives.  
+N'oublions pas que ce plan factoriel ne représente qu'environ 15% de l'inertie totale, une interprétation précise et approfondie de celui-ci n'a donc que peu de sens: la majorité de l'information se trouve de toutes façons dans le premier plan factoriel.
+
+### d) Interprétation des plats 216 et 218
+> Commentez la position des plats 218 et 216, aidez-vous des quelques valeurs initiales données pour retrouver ces commentaires (selon les interprétations des axes).
+
+Avant d'interpréter les positions de ces deux plats, il faut s'assurer que leur représentation
+est correcte:
+
+```{r}
+qlt = rowSums(pca_b$ind$cos2[data_ne$ID %in% c(216, 218),1:2])
+cat("Qualité de représentation du plat 216:", qlt[1], 
+"\nQualité de représentation du plat 218:", qlt[2])
+```
+
+Leur qualité de représentation est très bonne, on peut donc interpréter leur position sur le premier plan factoriel:
+
+```{r}
+colors_b = ifelse(data_ne$ID %in% c(216, 218), colors[1], colors[3])
+size_b = ifelse(data_ne$ID %in% c(216, 218), 3, 0.5)
+size_text = ifelse(data_ne$ID %in% c(216, 218), 3.2, 2)
+alpha_b = ifelse(data_ne$ID %in% c(216, 218), 1, 0.3)
+                                                             
+fviz_pca_ind(pca_b, labels=FALSE, pointsize=0.1, col.ind = colors[3]) + 
+  geom_point(aes(x=x, y=y), colour = colors_b, size=size_b, alpha=alpha_b) +
+  geom_text(label=rownames(pca_b$ind$coord), color=colors_b, check_overlap=TRUE,
+            vjust=-0.7, size=size_text) +
+  theme_rdsm
+```
+
+On voit que sur le premier plan factoriel, les plats 218 et 216 sont relativement
+similaires: ils se trouvent tous les deux dans le quatrième quadrant. Le plat 216 
+est plus riche en vitamines en général, de part sa plus grande valeur pour la
+première composante principale. Ils ont des valeurs similaires et négatives pour 
+leur seconde composante principale, ce sont donc des plats qui contiennent plus
+de vitamine C que la moyenne et moins de vitamines B1, B2, B3 que la moyenne.
+
+```{r}
+data_ne[data_ne$ID %in% c(216, 218), c("ID", "ShortDescrip")]
+```
+
+On remarque que les deux plats sont les mêmes, mais l'un est destiné à des enfants tandis que l'autre à des bébés. La quantité nutritionnelle est plus faible pour les bébés. Encore une fois, on ne sait pas si les données correspondent à des valeurs nutritionnelles rapportées au poids ou si ce sont les données du plat brut. On ne peut pas savoir si cette différence est simplement due à plat plus copieux pour les enfants que les bébés.
+
+### e) Variance des abscisses des points
+> Que vaut la variance des abscisses des points sur le premier plan factoriel ? donnez le calcul de 2 façons différentes.
+
+La variance des abscisses des points sur le premier plan factoriel est la variance des valeurs de la première composante principale. On fait évidemment attention à ne pas utiliser la variance corrigée.
+
+```{r}
+var(pca_b$ind$coord[,1]) * (dim(pca_b$ind$coord)[1]-1) / (dim(pca_b$ind$coord)[1])
+```
+
+Il s'agit de l'inertie du nuage de point expliquée par le premier axe, qui correspond à la valeur propre associée à cet axe. 
+
+```{r}
+pca_b$eig[1]
+```
+# Inactivation des plats les plus extrêmes
+
+### a) Filtration des données
+> Filtrez les données pour sélectionner tous les plats ayant une coordonnée: supérieure à 3 sur le premier axe, négative sur le deuxième axe.
+
+
+Il n'est pas très clair s'il nous est demandé d'enlever les plats qui satisfont les deux conditions simultanément ou au moins une. Nous allons choisir d'enlever les plats qui satisfont les deux conditions simultanément. Nous récupérons donc les indices de tous les plats remplissant ces conditions:
+
+```{r}
+data_c = data_ne
+to_remove_c = as.numeric(rownames(pca_b$ind$coord[(pca_b$ind$coord[,1]>3) & 
+                                                    (pca_b$ind$coord[, 2]<0),]))
+data_c_filtered = data_c[!(data_c$ID %in% to_remove_c),]
+cat("Nombre de plats à désactiver:", length(to_remove_c))
+```
+
+### b) ACP sur les données filtrées
+> Reprenez l’ACP en mettant ces plats en inactifs. Commentez l’interprétation du nouveau plan factoriel (1,2).
+
+```{r}
+pca_c = PCA(data_c[, 1:13], scale.unit = TRUE, ind.sup=to_remove_c, quanti.sup=10:13, graph=FALSE)
+ggplot(data.frame(x = names(pca_c$eig[, "eigenvalue"]), 
+                  y = pca_c$eig[, "eigenvalue"]), aes(x=x,y=y)) +
+  geom_bar(stat="identity", fill = colors[3], color = '#000000', width=0.3) +
+  labs(title = 'Eboulis des valeurs propres', x = "", y="") +  
+  theme_rdsm 
+```
+
+L'éboulis des valeurs propres a un profil similaire à celui de la question précédente.
+```{r}
+pca_c$eig
+```
+D'ailleurs, le profil de variance expliquée est lui aussi très similaire. D'après la règle de Kaiser, on ne souhaiterait ici aussi conserver que deux axes de projection.
+
+Nous allons à nouveau regarder les qualités de projection des variables afin de savoir si on peut les interpréter:
+```{r}
+repres = cbind(pca_c$var$coord[, 1:2], rowSums(pca_c$var$cos2[, 1:2]), pca_c$var$cos2[, 1:2])
+colnames(repres) = c("Phi1", "Phi2", "QLT12", "QLT1", "QLT2")
+repres
+```
+A l'exception de la vitamine C, toutes les variables sont très bien représentées sur le premier plan factoriel. Le constat est le même sur le premier axe. Sur le second axe, les variables les mieux représentées sont les vitamines A, B1 et B3.
+
+Comme précédemment, le premier axe a des composantes positives pour toutes les variables, et va donc s'interpréter comme un axe encodant la richesse nutritive des plats. Le second axe a des composantes négatives pour les vitamines B1, B2 et B3, et positives pour la vitamine A. Il s'interprète lui aussi comme précédemment, à ceci près que les coefficients sont opposés: ici, une faible valeur sera plutôt associée à des fortes valeurs de vitamines B&, B2 et B3 et faibles valeurs de vitamine A, et inversement.
+
+```{r}
+plot(pca_c, axes=1:2, choix="var") + theme_rdsm
+```
+
+Le positionnement relatif des variables supplémentaires - protéines, fibres, sucres et graisses - est le même que dans l'analyse précédente et s'interprète donc de la même manière.
+
+```{r}
+individuals_contributions = pca_c$ind$contrib[, c("Dim.1", "Dim.2")]
+individuals_contributions1 = individuals_contributions[
+  order(individuals_contributions[,1], decreasing=TRUE), ]
+individuals_contributions2 = individuals_contributions[
+  order(individuals_contributions[,2], decreasing=TRUE), ]
+individuals_contributions12 = individuals_contributions[
+  order(rowSums(individuals_contributions[,1:2]), decreasing=TRUE), ]
+```
+20 plats qui contribuent le plus à l'axe 1:
+```{r}
+twenty_axis1_plates = data_c[as.numeric(rownames(individuals_contributions1)),]$ID[1:20]
+data_c[data_c$ID %in% twenty_axis1_plates, "ShortDescrip"]
+```
+20 plats qui contribuent le plus à l'axe 2:
+```{r}
+twenty_axis2_plates = data_c[as.numeric(rownames(individuals_contributions2)),]$ID[1:20]
+data_c[data_c$ID %in% twenty_axis2_plates, "ShortDescrip"]
+```
+20 plats qui contribuent le plus à la construction du plan (1,2):
+```{r}
+twenty_axis12_plates = data_c[as.numeric(rownames(individuals_contributions12)),]$ID[1:20]
+data_c[data_c$ID %in% twenty_axis12_plates, "ShortDescrip"]
+```
+
+A nouveau, nous allons représenter les plats les mieux projetés sur le plan factoriel afin d'interpréter leur position, et rendre ceux qui sont moins biens représentés plus transparents.
+```{r}
+coords1 = data.frame(pca_c$ind$coord[, 1:2])
+colnames(coords1)[1:2] = c("Dim1", "Dim2")
+
+params1 = lapply(data.frame(cbind(
+  QLT12 = rowSums(pca_c$ind$cos2[, 1:2])),
+  contrib = rowSums(pca_c$ind$contrib[, 1:2]),
+  ID = rownames(pca_c$ind$coord)),
+  as.numeric)
+
+plot1 = ggplot(coords1) + 
+  geom_point(aes(x=Dim1, y=Dim2, alpha=params1$QLT12 **2), size=params1$QLT12,
+             colour = colors[3]) +
+  geom_text(x=coords1$Dim1, y=coords1$Dim2, label=params1$ID, vjust=-0.5, check_overlap=TRUE,
+            alpha=params1$QLT12 **2, size=3 * params1$QLT12) +
+  labs(title="Premier plan factoriel") +
+  theme_rdsm
+```
+
+On voit que la répartition des points est très similaire à celle de la question précédente, à une inversion du sens du second axe près. L'interprétation des axes et du positionnement des plats est donc similaire. Les plats qui avaient été sélectionnés pour discuter de leur proximité sont à nouveau proches les uns des autres.
+
+```{r}
+plates = c(133, 216)
+data_ne[data_ne$ID %in% plates, c("ID", "ShortDescrip")]
+```
+
+Le plat 133 est proche des plats plats 125 et 134 discutés à la question précédente, avec à nouveau une grande richesse en nutriments en général et une plus grande richesse relative en vitamines B1, B2, B3 et plus faible en vitamine C. Il est composé de flocons d'avoine, sa proximité avec des plats composés de céréales n'est donc pas surprenante.
+
+Le plat 216 a une grande richesse en nutriments car il a une forte première composante principale, et d'après sa position selon le deuxième axe contient plus de vitamine C que la moyenne et moins de vitamines B1, B2, et B3 que la moyenne. Il s'agit de nourriture pour des enfants et pas des bébés, ce qui explique probablement sa position plus extrême.  
+
+
+On ne va pas s'occuper du deuxième plan factoriel. Comme a la question précédente, il contient assez peu d'information.
+
+```{r}
+coords2 = data.frame(pca_c$ind$coord[, 3:4])
+colnames(coords2)[1:2] = c("Dim3", "Dim4")
+
+params2 = lapply(data.frame(cbind(
+  QLT34 = rowSums(pca_c$ind$cos2[, 3:4])),
+  contrib = rowSums(pca_c$ind$contrib[, 3:4]),
+  ID = rownames(pca_c$ind$coord)),
+  as.numeric)
+
+plot2 = ggplot(coords2) + 
+  geom_point(aes(x=Dim3, y=Dim4, alpha=params2$QLT34 **2), size=1.5*params2$QLT34,
+             colour = colors[3]) +
+  geom_text(x=coords2$Dim3, y=coords2$Dim4, label=params2$ID, vjust=-0.5,
+            alpha=params2$QLT34 **2, size=3 * params2$QLT34) +
+  labs(title="Second plan factoriel") +
+  theme_rdsm
+
+grid.arrange(plot1, plot2, ncol=2)
+```
+
+# ACM sur variables catégorisées
+
+> Comme pour la variable de Sucre dans la partie A, pour toutes les variables de data.baby2.comp,
+contruisez des variables catégorielles à 3 modalités (dont les niveaux seront « Faible », « Moyen » et
+Fort »). Applique l’ACM à ce tableau de données catégorielles en utilisant les seules mesures de vitamines comme variables actives (les autres étant inactives). Retrouver l’inertie totale. Tracer le graphe des modalités (sans projection des individus) et commentez les résultats.
+
+On commence par catégoriser les variables, puis appliquer une analyse des correspondances multiples sur le tableau ainsi obtenu.
+
+```{r}
+data_d = data.baby2.comp
+
+for (n in names(data_d[1:13])) {
+  levels = quantile(data_d[, n], c(0.25, 0.75))
+  short_n = gsub("_.+", "", n)
+  short_n = gsub("^Vit", "", short_n)
+  data_d[n] = as.factor(
+    ifelse(data_d[n] < levels[1], paste(c(short_n, "-"), collapse=""),
+           ifelse(data_d[n] < levels[2], paste(c(short_n, "="), collapse=""), 
+                  paste(c(short_n, "+"), collapse=""))))
+}
+
+mca = MCA(data_d[, 1:13], quali.sup=10:13, graph=FALSE)
+
+cat("L'inertie totale est la somme des valeurs propres:\n Inertie totale:",
+    sum(mca$eig[, "eigenvalue"]),
+    "\n\nOn peut également la calculer comme m/p - 1:\n",
+    "Inertie totale théorique:",
+    length(unique(unlist(data_d[1:9])))/9 - 1, "\n")
+```
+
+A partir de l'ACM, on peut tracer le graphe des modalités:
+
+```{r}
+modalities = as.data.frame(cbind(mca$var$coord[, 1:2],
+                                 rowSums(mca$var$cos2[, 1:2])))
+colnames(modalities) = c("Dim1", "Dim2", "QLT")
+
+modalities$color = sapply(
+  rownames(modalities),
+  function(x) ifelse(grepl('-', x, fixed=TRUE), 
+                     colors[2], 
+                     ifelse(grepl("=", x, fixed=T),
+                            colors[4],
+                            colors[5])))
+
+supp_modalities = as.data.frame(cbind(mca$quali.sup$coord[, 1:2],
+                                 rowSums(mca$quali.sup$cos2[, 1:2])))
+colnames(supp_modalities) = c("Dim1", "Dim2", "QLT")
+
+supp_modalities$color = sapply(
+  rownames(supp_modalities),
+  function(x) ifelse(grepl('-', x, fixed=TRUE), 
+                     colors[2], 
+                     ifelse(grepl("=", x, fixed=T),
+                            colors[4],
+                            colors[5])))
+
+
+ggplot(data=modalities, aes(x=Dim1, y=Dim2)) + 
+  geom_point(aes(alpha=QLT**2), color=modalities$color) +
+  geom_point(data=supp_modalities, 
+             aes(x=Dim1, y=Dim2), size=0.3) +
+  geom_text(aes(label=rownames(modalities), vjust=-0.5, hjust=-0.25, alpha=QLT),
+            size=4*modalities$QLT, color=modalities$color) +
+  geom_text(data=supp_modalities, 
+            aes(label=rownames(supp_modalities), vjust=1.2, hjust=0),
+            size=3, color=supp_modalities$color) +
+  labs(title="Graphe des modalités") + theme_rdsm
+```
+
+Les modalités fortes sont représentées à droite, les modalités faibles en haut à gauche, et les modalités moyennes plutôt au milieu à gauche. Il semble clair que le premier axe encode la richesse en nutriment des plats.  
+L'interprétation du second axe est moins claire: les modalités faibles ont une grande seconde composante, et les modalités fortes ont une seconde composante de magnitude assez faible. Les modalités moyennes ont des magnitudes plutôt faibles et dans les valeurs négatives, à l'exception des graisses, protéines, et des vitamines B1, B2, B3. Notons que la vitamine C a sa faible composante en bas et sa forte composante en haut. La variable C+ est à l'opposé des variables B1+, B2+ et B3+ par rapport au point central, montrant une corrélation négative entre ces deux groupes de variables: on a une confirmation visuelle de la manière dont on a interprété le second axe.
+L'interprétation des axes est donc très similaire à celle qui a été faite avec l'ACP.  
+
+```{r}
+cbind(QLT12 = rowSums(mca$quali.sup$cos2[, 1:2]),
+      mca$quali.sup$coord[, 1:2])
+```
+On voit que les fibres sont particulièrement mal représentées. Les protéines sont quand à elles très bien représentées, on voit qu'elles sont très bien alignées selon le premier axe (niveau faible, composante de -0.7, niveau moyen composante de -0.3 et composante forte composante de 1.3), ce qui confirme notre analyse antérieure montrant que les protéines sont très bien associées à des plats riches en nutriments.  On voit aussi une proximité entre les niveaux forts de sucre, graisses et protéines, montrant que ces modalités sont corrélées pour des niveaux fort. En général, leurs niveaux faibles, moyens et élevés suivent la tendance générale d'avoir les niveaux fort à l'est, moyens au sud-ouest et faibles au nord-ouest.
+
+Il serait malvenu de chercher à interpréter plus profondément ces axes car les qualités de représentation de la plupart des modalités sont assez faibles, et on ne peut donc pas récupérer plus d'information qu'avec l'ACP.
+
+```{r}
+cbind(QLT12 = rowSums(mca$var$cos2[, 1:2]),
+      mca$var$coord[, 1:2])
+```
